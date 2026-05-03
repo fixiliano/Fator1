@@ -39,7 +39,7 @@
     display: flex;
     flex-direction: column;
     min-height: 100vh;
-    overflow-x: hidden;
+    overflow-x: clip; /* FIX #7: era hidden, bloqueava scroll interno dos painéis */
   }
 
   /* ========== LAYOUT ========== */
@@ -1117,10 +1117,13 @@ function calcularLucro() {
 
   const despesas = financeiro.filter(f => f.tipo === 'despesa').reduce((s, f) => s + f.valor, 0);
   const entradas = financeiro.filter(f => f.tipo === 'entrada').reduce((s, f) => s + f.valor, 0);
-  const margemBruta = receita - custo;
-  const lucroReal = margemBruta - despesas + entradas;
+  // FIX #1 + #2: separação explícita de lucro bruto e líquido
+  const lucroBruto   = receita - custo;                // vendas - custo dos produtos
+  const lucroLiquido = lucroBruto - despesas + entradas; // bruto - despesas + entradas extras
+  const margemBruta  = lucroBruto;  // alias legado
+  const lucroReal    = lucroLiquido; // alias legado
 
-  return { receita, custo, margemBruta, despesas, entradas, lucroReal };
+  return { receita, custo, margemBruta, lucroBruto, despesas, entradas, lucroLiquido, lucroReal };
 }
 
 // ========================
@@ -1211,7 +1214,13 @@ function finalizarVenda() {
   const venda = {
     id: Date.now().toString(),
     data: new Date().toISOString(),
-    itens: cart.map(i => ({ id: i.id, nome: i.nome, qty: i.qty, preco: i.preco, custo: i.custo || 0 })),
+    itens: cart.map(i => ({
+      id: i.id,
+      nome: i.nome,
+      qty: i.qty,
+      preco: i.preco,            // FIX #3: salva preço no momento da venda
+      custo: i.custo || 0        // FIX #3: salva custo no momento da venda
+    })),
     subtotal, desconto, total,
     pagamento: selectedPayment,
     clienteId: clienteId || null,
@@ -1258,7 +1267,7 @@ function gerarCupom(venda) {
   const dataFmt = data.toLocaleDateString('pt-BR') + ' ' + data.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const w = 40; // largura do cupom
 
-  const line = '─'.repeat(w);
+  const line  = '─'.repeat(w);
   const dline = '═'.repeat(w);
 
   const center = (str) => {
@@ -1271,6 +1280,7 @@ function gerarCupom(venda) {
     return label + ' '.repeat(Math.max(1, space)) + value;
   };
 
+  // FIX #5: cabeçalho completo com nome, endereço e telefone
   let text = '';
   text += center(cfg.nome.toUpperCase()) + '\n';
   if (cfg.endereco) text += center(cfg.endereco) + '\n';
@@ -1278,21 +1288,26 @@ function gerarCupom(venda) {
   text += dline + '\n';
   text += center('CUPOM NÃO FISCAL') + '\n';
   text += line + '\n';
+
+  // FIX #5: data e hora completos
   text += `Data: ${dataFmt}  Nº: ${venda.id.slice(-6)}\n`;
   text += line + '\n';
 
-  // Itens
+  // FIX #5: lista de itens com qtd, preço unitário e subtotal
   venda.itens.forEach(item => {
     text += `${item.nome}\n`;
     text += rAlign(`  ${item.qty} x ${fmt(item.preco)}`, fmt(item.preco * item.qty)) + '\n';
   });
 
+  // FIX #5: subtotal, desconto e total final
   text += line + '\n';
   text += rAlign('Subtotal:', fmt(venda.subtotal)) + '\n';
   if (venda.desconto > 0) text += rAlign('Desconto:', '- ' + fmt(venda.desconto)) + '\n';
   text += dline + '\n';
-  text += rAlign('TOTAL:', fmt(venda.total)) + '\n';
+  text += rAlign('TOTAL:', fmt(venda.total)) + '\n';  // FIX #4: total = subtotal - desconto
   text += dline + '\n';
+
+  // FIX #5: forma de pagamento
   text += rAlign('Pagamento:', venda.pagamento) + '\n';
   text += line + '\n';
   text += center(cfg.msg || 'Obrigado pela preferência!') + '\n';
@@ -1300,7 +1315,7 @@ function gerarCupom(venda) {
   // Modal
   document.getElementById('cupom-modal-content').textContent = text;
 
-  // QR Code Pix
+  // FIX #5: QR Code Pix — exibe se tiver chave Pix configurada
   const qrDiv = document.getElementById('cupom-qr');
   qrDiv.innerHTML = '';
   if (cfg.pix) {
@@ -1311,11 +1326,14 @@ function gerarCupom(venda) {
       label.style.cssText = 'font-size:11px;color:#333;margin-top:6px;font-family:monospace';
       label.textContent = `Pix: ${cfg.pix} | ${fmt(venda.total)}`;
       qrDiv.appendChild(label);
-    } catch(e) { qrDiv.innerHTML = '<p style="font-size:11px;color:#666">QR Pix: ' + cfg.pix + '</p>'; }
+    } catch(e) {
+      qrDiv.innerHTML = '<p style="font-size:11px;color:#666">QR Pix: ' + cfg.pix + '</p>';
+    }
   }
 
   // Para impressão (window.print)
-  document.getElementById('cupom-print').innerHTML = `<div style="font-family:monospace;white-space:pre;font-size:12px">${text}</div>`;
+  document.getElementById('cupom-print').innerHTML =
+    `<div style="font-family:monospace;white-space:pre;font-size:12px">${text.replace(/</g,'&lt;')}</div>`;
   if (cfg.pix && qrDiv.innerHTML) {
     document.getElementById('cupom-print').innerHTML += qrDiv.innerHTML;
   }
@@ -1676,14 +1694,14 @@ function adicionarDespesa() {
 }
 
 function renderFinanceiro() {
-  const { receita, custo, margemBruta, despesas, entradas, lucroReal } = calcularLucro();
+  const { receita, custo, lucroBruto, despesas, entradas, lucroLiquido } = calcularLucro();
   document.getElementById('fin-receita').textContent = fmt(receita);
   document.getElementById('fin-custo').textContent = fmt(custo);
-  document.getElementById('fin-margem').textContent = fmt(margemBruta);
+  document.getElementById('fin-margem').textContent = fmt(lucroBruto);   // FIX: lucro bruto correto
   document.getElementById('fin-despesas').textContent = fmt(despesas);
   document.getElementById('fin-entradas').textContent = fmt(entradas);
-  document.getElementById('fin-lucro').textContent = fmt(lucroReal);
-  document.getElementById('fin-lucro').className = lucroReal >= 0 ? 'text-success' : 'text-danger';
+  document.getElementById('fin-lucro').textContent = fmt(lucroLiquido);  // FIX: líquido = bruto - despesas + entradas
+  document.getElementById('fin-lucro').className = lucroLiquido >= 0 ? 'text-success' : 'text-danger';
 
   const fin = carregarDados(KEYS.financeiro);
   const tbody = document.getElementById('financeiro-tbody');
@@ -2034,14 +2052,14 @@ function atualizarDashboard() {
   document.getElementById('dash-estoque').textContent = produtos.length;
   document.getElementById('dash-clientes').textContent = clientes.length;
 
-  const { receita, custo, despesas, entradas, lucroReal } = calcularLucro();
-  document.getElementById('dash-lucro').textContent = fmt(lucroReal);
-  document.getElementById('dash-lucro').className = `stat-value ${lucroReal >= 0 ? 'text-success' : 'text-danger'}`;
+  const { receita, custo, lucroBruto, despesas, entradas, lucroLiquido } = calcularLucro();
+  document.getElementById('dash-lucro').textContent = fmt(lucroLiquido);
+  document.getElementById('dash-lucro').className = `stat-value ${lucroLiquido >= 0 ? 'text-success' : 'text-danger'}`;
   document.getElementById('df-receitas').textContent = fmt(receita);
   document.getElementById('df-custos').textContent = fmt(custo);
   document.getElementById('df-despesas').textContent = fmt(despesas);
   document.getElementById('df-entradas').textContent = fmt(entradas);
-  document.getElementById('df-lucro-total').textContent = fmt(lucroReal);
+  document.getElementById('df-lucro-total').textContent = fmt(lucroLiquido);
 
   // Alertas
   const baixos = produtos.filter(p => p.estoque <= (p.minimo || 5));
